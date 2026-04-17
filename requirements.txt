@@ -1,3 +1,5 @@
-streamlit
-crewai
-PyPDF2
+streamlit==1.33.0
+crewai==0.28.8
+PyPDF2==3.0.1
+openai
+tiktoken
