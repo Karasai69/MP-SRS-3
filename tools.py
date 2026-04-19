@@ -1,15 +1,15 @@
 from PyPDF2 import PdfReader
 
-# 📄 Извлечение текста из PDF
+# 📄 Чтение PDF
 def extract_text_from_pdf(file):
     reader = PdfReader(file)
     text = ""
     for page in reader.pages:
-        text += page.extract_text()
+        text += page.extract_text() or ""
     return text
 
 
-# 📊 Кастомный скоринг (сравнение)
+# 📊 Простое сравнение
 def score_resume(resume_text, job_text):
     resume_words = set(resume_text.lower().split())
     job_words = set(job_text.lower().split())

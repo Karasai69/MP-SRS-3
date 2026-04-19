@@ -1,89 +1,138 @@
 import streamlit as st
-from crewai import Crew
-from agents import create_agents
-from tasks import create_tasks
-from tools import extract_text_from_pdf, score_resume
 import json
 import os
+from tools import extract_text_from_pdf, score_resume
+from openai import OpenAI
 
-st.title("📄 Анализ резюме и вакансии (Multi-Agent AI)")
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# =========================
-# 🔹 ЗОНА 1 — КОНФИГ
-# =========================
+st.title("📄 AI Анализ резюме (мультиагентная система)")
 
 st.header("⚙️ Настройка агентов")
 
-role_input = st.text_input("Роль генератора", "Карьерный консультант")
-goal_input = st.text_area("Цель", "Помочь получить работу")
-
-# =========================
-# 🔹 ЗОНА 2 — ВХОД
-# =========================
+analyst_role = st.text_input("Агент 1 (Аналитик)", "Анализирует резюме")
+matcher_role = st.text_input("Агент 2 (Сопоставитель)", "Сравнивает с вакансией")
+generator_role = st.text_input("Агент 3 (Генератор)", "Создает результат")
 
 st.header("📥 Входные данные")
 
 resume_file = st.file_uploader("Загрузите PDF резюме")
 job_text = st.text_area("Вставьте текст вакансии")
 
-# =========================
-# 🔹 ЗОНА 3 — ЗАПУСК
-# =========================
+with open("knowledge.txt", "r", encoding="utf-8") as f:
+    knowledge = f.read()
+USE_CREWAI = False
+st.header("🚀 Запуск")
 
-st.header("🚀 Запуск системы")
+if st.button("Запустить анализ"):
 
-if st.button("Запустить"):
-
-    if resume_file is None or job_text == "":
-        st.error("Загрузите файл и вставьте вакансию")
+    if resume_file is None or job_text.strip() == "":
+        st.error("Загрузите файл и введите вакансию")
     else:
-        # 📄 Извлечение текста
         resume_text = extract_text_from_pdf(resume_file)
 
-        # 📊 Скоринг
         score, common = score_resume(resume_text, job_text)
 
-        st.write(f"Совпадение: {score:.2f}")
+        st.write(f"📊 Совпадение: {score:.2f}")
 
-        # 🤖 Агенты
-        extractor, matcher, clarifier, generator = create_agents()
-
-        # 📋 Задачи
-        tasks = create_tasks(extractor, matcher, clarifier, generator, score)
-
-        # 🧠 Memory
-        memory_data = {}
+        memory = {}
         if os.path.exists("memory.json"):
             with open("memory.json", "r") as f:
-                memory_data = json.load(f)
+                memory = json.load(f)
 
-        # 🚀 Crew
-        crew = Crew(
-            agents=[extractor, matcher, clarifier, generator],
-            tasks=tasks,
-            memory=True
-        )
+        analysis_prompt = f"""
+        Ты аналитик резюме.
+        Резюме:
+        {resume_text}
 
-        result = crew.kickoff()
+        Выдели навыки и опыт.
+        """
 
-        st.subheader("📊 Результат")
+        analysis = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": analysis_prompt}]
+        ).choices[0].message.content
+
+        st.subheader("🧠 Анализ резюме")
+        st.write(analysis)
+
+        match_prompt = f"""
+        Сравни резюме и вакансию.
+
+        Резюме:
+        {resume_text}
+
+        Вакансия:
+        {job_text}
+
+        Совпадение слов: {common}
+
+        Дай оценку соответствия.
+        """
+
+        match = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": match_prompt}]
+        ).choices[0].message.content
+
+        st.subheader("🔍 Сопоставление")
+        st.write(match)
+
+        if score < 0.5:
+            st.warning("⚠️ Недостаточно данных — требуется уточнение")
+
+            question = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{
+                    "role": "user",
+                    "content": "Задай 1 короткий уточняющий вопрос кандидату"
+                }]
+            ).choices[0].message.content
+
+            st.write("❓ Вопрос:", question)
+
+            user_answer = st.text_input("Ваш ответ")
+
+        else:
+            user_answer = ""
+
+        final_prompt = f"""
+        Используй знания:
+        {knowledge}
+
+        Резюме:
+        {resume_text}
+
+        Вакансия:
+        {job_text}
+
+        Ответ пользователя:
+        {user_answer}
+
+        Сгенерируй:
+        1. Краткое summary
+        2. Cover letter
+        3. Рекомендации
+        """
+
+        result = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": final_prompt}]
+        ).choices[0].message.content
+
+        st.subheader("📄 Результат")
         st.write(result)
 
-        # 💾 Сохранение memory
-        memory_data["last_score"] = score
-        memory_data["skills"] = common
-
-        with open("memory.json", "w") as f:
-            json.dump(memory_data, f)
-
-        # =========================
-        # 👤 HITL
-        # =========================
 
         st.subheader("✍️ Проверка человеком (HITL)")
+        edited = st.text_area("Отредактируйте результат", result)
 
-        edited = st.text_area("Отредактируйте перед финалом", result)
-
-        if st.button("Подтвердить финал"):
+        if st.button("Подтвердить"):
             st.success("Финальная версия:")
             st.write(edited)
+
+        memory["last_score"] = score
+        memory["skills"] = common
+
+        with open("memory.json", "w") as f:
+            json.dump(memory, f)
